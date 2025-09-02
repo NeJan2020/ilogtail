@@ -644,6 +644,8 @@ func (dc *ContainerCenter) CreateInfoDetail(info types.ContainerJSON, envConfigP
 		})
 	}
 	sortMounts(info.Mounts)
+
+	containerNameTag["_container_id_"] = info.ID
 	did := &DockerInfoDetail{
 		StdoutPath:       info.LogPath,
 		ContainerInfo:    info,
