@@ -30,6 +30,14 @@ jobs:
       with:
         go-version: 1.21
 
+    - name: Set custom submodule URL and fetch
+      run: |
+        SUBMODULE_PATH="core/_thirdparty/coolbpf"
+        git config submodule.$SUBMODULE_PATH.url "https://github.com/aliyun/coolbpf.git"
+        git submodule update --init
+        cd $SUBMODULE_PATH
+        echo "Current commit: $(git rev-parse HEAD)"
+
     - name: Generate App Version
       run: |
         TAG=$(git describe --tags --exact-match 2>/dev/null || echo "")
@@ -42,6 +50,12 @@ jobs:
         fi
 
     - name: Build binary
+      env:
+        BUILD_LOGTAIL_UT: OFF
+        ENABLE_COMPATIBLE_MODE: ON
+        ENABLE_STATIC_LINK_CRT: ON
+        WITHOUTGDB: ON
+        MAKE_JOBS: 16
       run: |
         VERSION=${{ env.APP_VERSION }} make dist
 
