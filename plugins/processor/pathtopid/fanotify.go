@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/alibaba/ilogtail/pkg/logger"
+	"github.com/alibaba/ilogtail/pkg/pipeline"
 	"github.com/s3rj1k/go-fanotify/fanotify"
 	"golang.org/x/sys/unix"
 )
@@ -37,7 +38,7 @@ type notifyEvent struct {
 	evType eventType
 }
 
-func (f *fanotifyCache) Init() {
+func (f *fanotifyCache) Init(context pipeline.Context) {
 	notify, err := fanotify.Initialize(
 		unix.FAN_CLOEXEC|
 			unix.FAN_CLASS_NOTIF,
@@ -46,8 +47,9 @@ func (f *fanotifyCache) Init() {
 			unix.O_CLOEXEC,
 	)
 	if err != nil {
-		logger.Errorf(context.Background(), "init notify", "err: %v", err)
+		logger.Errorf(context.GetRuntimeContext(), "INIT NOTIFY FAILED", "init notify failed, err: %v", err)
 	} else {
+		logger.Info(context.GetRuntimeContext(), "init notify success")
 		f.notify = notify
 	}
 	if val, ok := os.LookupEnv("HOST_DIR"); ok {

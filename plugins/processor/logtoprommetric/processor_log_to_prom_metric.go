@@ -177,7 +177,7 @@ func (s *ServiceTag) FillTag(key string, value string) {
 		s.Namespace = value
 	case "_container_name_":
 		s.ContainerName = value
-	case "_source_", "__tag__:__path__":
+	case "_source_", "__tag__:__path__", "__path__":
 		s.SourceFrom = value
 	case "_container_id_":
 		if len(value) > 12 {

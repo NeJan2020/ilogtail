@@ -13,7 +13,7 @@ import (
 const pluginName = "processor_path_to_pid"
 
 var f *fanotifyCache = &fanotifyCache{}
-var initFnotifyOnce sync.Once
+var initFanotifyOnce sync.Once
 
 func init() {
 	pipeline.Processors[pluginName] = func() pipeline.Processor {
@@ -38,28 +38,42 @@ func (p *ProcessorPathToPid) Description() string {
 }
 
 func (p *ProcessorPathToPid) Init(context pipeline.Context) error {
-	initFnotifyOnce.Do(func() {
-		f.Init()
+	initFanotifyOnce.Do(func() {
+		f.Init(context)
 	})
+
 	p.context = context
 	if val, ok := os.LookupEnv("HOST_DIR"); ok {
 		p.host_dir = val
 	} else {
 		p.host_dir = ""
 	}
-	go f.startWatchLifeCycle()
+
+	if f != nil && f.notify != nil {
+		go f.startWatchLifeCycle()
+	} else {
+		logger.Errorf(p.context.GetRuntimeContext(), "INIT NOTIFY FAILED", "Init processor_path_to_pid failed, fanotify not init")
+	}
+
 	logger.Infof(p.context.GetRuntimeContext(), "Init processor_path_to_pid")
 	return nil
 }
 
 func (p *ProcessorPathToPid) ProcessLogs(logArray []*protocol.Log) []*protocol.Log {
 	for _, log := range logArray {
+		logger.Info(p.context.GetRuntimeContext(), "log", log.Values)
+		for _, kv := range log.Contents {
+			logger.Info(p.context.GetRuntimeContext(), "k", kv.Key, "v", kv.Value)
+		}
 		p.processLog(log)
 	}
 	return logArray
 }
 
 func (p *ProcessorPathToPid) processLog(log *protocol.Log) {
+	if f == nil || f.notify == nil {
+		return
+	}
 	for _, content := range log.Contents {
 		if content.Key == "__tag__:__path__" {
 			info := f.getPidFromPath(content.Value)
