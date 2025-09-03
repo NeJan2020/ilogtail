@@ -46,39 +46,28 @@ type ProcessorLogToPromMetric struct {
 }
 
 func (p *ProcessorLogToPromMetric) Process(in *models.PipelineGroupEvents, context pipeline.PipelineContext) {
-TraverseEventArray:
+	svcTag := &ServiceTag{
+		Node: HOSTNAME,
+	}
+
+	for k, v := range in.Group.Tags.Iterator() {
+		svcTag.FillTag(k, v)
+	}
+
 	for _, event := range in.Events {
 		if event.GetType() != models.EventTypeLogging {
 			return
 		}
-
-		var svcTag = &ServiceTag{
-			Node: HOSTNAME,
-		}
 		contents := event.(*models.Log).GetIndices()
-		var content string
-		for k, v := range contents.Iterator() {
-			if k != "content" {
-				if vStr, ok := v.(string); ok {
-					svcTag.FillTag(k, vStr)
-				}
-				continue
-			}
+		content, ok := contents.Get("content").(string)
+		if !ok || len(content) == 0 {
+			continue
+		}
 
-			if vStr, ok := v.(string); ok {
-				content = vStr
-			}
-			if len(content) == 0 {
-				continue TraverseEventArray
-			}
-			// Ignore non-first line logs
-			if !parser.IsFirstLine(content) {
-				continue TraverseEventArray
-			}
+		if !parser.IsFirstLine(content) {
+			continue
 		}
-		if len(content) == 0 {
-			continue TraverseEventArray
-		}
+
 		lastLogInfo := p.GetLastLogInfo(svcTag)
 		if lastLogInfo == nil {
 			lastLogInfo = &LastLogInfo{
@@ -94,12 +83,13 @@ TraverseEventArray:
 		lastLogInfo.TimestampSecond = int64(event.GetTimestamp())
 		if !lastLogInfo.IsFirstLine(content) {
 			lastLogInfo.isLastNewLine = false
-			continue TraverseEventArray
+			continue
 		}
 		lastLogInfo.isLastNewLine = true
 		logLevel, exceptionType := parser.GuessLevelAndException(content)
 		p.CounterInc(svcTag, logLevel, exceptionType)
 	}
+
 	context.Collector().Collect(in.Group, in.Events...)
 }
 

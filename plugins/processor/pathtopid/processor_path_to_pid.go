@@ -63,54 +63,30 @@ func (p *ProcessorPathToPid) Init(context pipeline.Context) error {
 // Process... log only
 func (p *ProcessorPathToPid) Process(in *models.PipelineGroupEvents, context pipeline.PipelineContext) {
 	// DEBUG
+	for k, v := range in.Group.Metadata.Iterator() {
+		logger.Info(p.context.GetRuntimeContext(), "GROUP MD", "k", k, "v", v)
+	}
 	for k, v := range in.Group.Tags.Iterator() {
 		logger.Info(p.context.GetRuntimeContext(), "GROUP TAG", "k", k, "v", v)
 	}
 
-	for _, event := range in.Events {
-		p.processEvent(event)
+	if in.Group != nil && in.Group.Tags != nil {
+		path := in.Group.Tags.Get("__path__")
+		if len(path) >= 0 {
+			info := f.getPidFromPath(path)
+			if info == nil {
+				f.addPathWatch(path)
+			} else if info.init {
+				in.Group.Tags.Add("pid", strconv.Itoa(info.pid))
+			}
+		}
 	}
+
 	context.Collector().Collect(in.Group, in.Events...)
-}
-
-func (p *ProcessorPathToPid) processEvent(event models.PipelineEvent) {
-	if event.GetType() != models.EventTypeLogging {
-		return
-	}
-
-	contents := event.(*models.Log).GetIndices()
-	// DEBUG
-	for k, v := range contents.Iterator() {
-		logger.Info(p.context.GetRuntimeContext(), "contents tag", "k", k, "v", v)
-	}
-
-	v := contents.Get("__tag__:__path__")
-	var path string
-	if va, ok := v.([]byte); ok {
-		path = string(va)
-	}
-	if va, ok := v.(string); ok {
-		path = va
-	}
-	if len(path) == 0 {
-		return
-	}
-
-	info := f.getPidFromPath(path)
-	if info == nil {
-		f.addPathWatch(path)
-	} else if info.init {
-		contents.Add("pid", strconv.Itoa(info.pid))
-	}
 }
 
 func (p *ProcessorPathToPid) ProcessLogs(logArray []*protocol.Log) []*protocol.Log {
 	for _, log := range logArray {
-		// DEBUG
-		logger.Info(p.context.GetRuntimeContext(), "log", log.Values)
-		for _, kv := range log.Contents {
-			logger.Info(p.context.GetRuntimeContext(), "k", kv.Key, "v", kv.Value)
-		}
 		p.processLog(log)
 	}
 	return logArray
