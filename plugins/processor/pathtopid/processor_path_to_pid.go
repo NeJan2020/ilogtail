@@ -6,6 +6,7 @@ import (
 	"sync"
 
 	"github.com/alibaba/ilogtail/pkg/logger"
+	"github.com/alibaba/ilogtail/pkg/models"
 	"github.com/alibaba/ilogtail/pkg/pipeline"
 	"github.com/alibaba/ilogtail/pkg/protocol"
 )
@@ -59,8 +60,53 @@ func (p *ProcessorPathToPid) Init(context pipeline.Context) error {
 	return nil
 }
 
+// Process... log only
+func (p *ProcessorPathToPid) Process(in *models.PipelineGroupEvents, context pipeline.PipelineContext) {
+	// DEBUG
+	for k, v := range in.Group.Tags.Iterator() {
+		logger.Info(p.context.GetRuntimeContext(), "GROUP TAG", "k", k, "v", v)
+	}
+
+	for _, event := range in.Events {
+		p.processEvent(event)
+	}
+	context.Collector().Collect(in.Group, in.Events...)
+}
+
+func (p *ProcessorPathToPid) processEvent(event models.PipelineEvent) {
+	if event.GetType() != models.EventTypeLogging {
+		return
+	}
+
+	contents := event.(*models.Log).GetIndices()
+	// DEBUG
+	for k, v := range contents.Iterator() {
+		logger.Info(p.context.GetRuntimeContext(), "contents tag", "k", k, "v", v)
+	}
+
+	v := contents.Get("__tag__:__path__")
+	var path string
+	if va, ok := v.([]byte); ok {
+		path = string(va)
+	}
+	if va, ok := v.(string); ok {
+		path = va
+	}
+	if len(path) == 0 {
+		return
+	}
+
+	info := f.getPidFromPath(path)
+	if info == nil {
+		f.addPathWatch(path)
+	} else if info.init {
+		contents.Add("pid", strconv.Itoa(info.pid))
+	}
+}
+
 func (p *ProcessorPathToPid) ProcessLogs(logArray []*protocol.Log) []*protocol.Log {
 	for _, log := range logArray {
+		// DEBUG
 		logger.Info(p.context.GetRuntimeContext(), "log", log.Values)
 		for _, kv := range log.Contents {
 			logger.Info(p.context.GetRuntimeContext(), "k", kv.Key, "v", kv.Value)

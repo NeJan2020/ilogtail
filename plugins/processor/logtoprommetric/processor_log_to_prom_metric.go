@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/alibaba/ilogtail/pkg/models"
 	"github.com/alibaba/ilogtail/pkg/pipeline"
 	"github.com/alibaba/ilogtail/pkg/protocol"
 	parser "github.com/coroot/logparser"
@@ -42,6 +43,64 @@ type ProcessorLogToPromMetric struct {
 	context pipeline.Context
 	// lastLogInfo map[ServiceTag]*LastLogInfo
 	lastLogInfo sync.Map
+}
+
+func (p *ProcessorLogToPromMetric) Process(in *models.PipelineGroupEvents, context pipeline.PipelineContext) {
+TraverseEventArray:
+	for _, event := range in.Events {
+		if event.GetType() != models.EventTypeLogging {
+			return
+		}
+
+		var svcTag = &ServiceTag{
+			Node: HOSTNAME,
+		}
+		contents := event.(*models.Log).GetIndices()
+		var content string
+		for k, v := range contents.Iterator() {
+			if k != "content" {
+				if vStr, ok := v.(string); ok {
+					svcTag.FillTag(k, vStr)
+				}
+				continue
+			}
+
+			if vStr, ok := v.(string); ok {
+				content = vStr
+			}
+			if len(content) == 0 {
+				continue TraverseEventArray
+			}
+			// Ignore non-first line logs
+			if !parser.IsFirstLine(content) {
+				continue TraverseEventArray
+			}
+		}
+		if len(content) == 0 {
+			continue TraverseEventArray
+		}
+		lastLogInfo := p.GetLastLogInfo(svcTag)
+		if lastLogInfo == nil {
+			lastLogInfo = &LastLogInfo{
+				isLastNewLine:                true,
+				isFirstLineContainsTimestamp: parser.IsContainsTimestamp(content),
+				pythonTraceback:              false,
+				pythonTracebackExpected:      false,
+				TimestampSecond:              int64(event.GetTimestamp()),
+			}
+			p.UpdateLogInfo(svcTag, lastLogInfo)
+		}
+
+		lastLogInfo.TimestampSecond = int64(event.GetTimestamp())
+		if !lastLogInfo.IsFirstLine(content) {
+			lastLogInfo.isLastNewLine = false
+			continue TraverseEventArray
+		}
+		lastLogInfo.isLastNewLine = true
+		logLevel, exceptionType := parser.GuessLevelAndException(content)
+		p.CounterInc(svcTag, logLevel, exceptionType)
+	}
+	context.Collector().Collect(in.Group, in.Events...)
 }
 
 func (p *ProcessorLogToPromMetric) ProcessLogs(logArray []*protocol.Log) []*protocol.Log {
