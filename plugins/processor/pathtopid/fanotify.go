@@ -23,6 +23,8 @@ type fanotifyCache struct {
 	// path2pid -> host_dir + path
 	path2pid map[string]*info
 	mu       sync.RWMutex
+
+	context pipeline.Context
 }
 
 type eventType int
@@ -39,6 +41,7 @@ type notifyEvent struct {
 }
 
 func (f *fanotifyCache) Init(context pipeline.Context) {
+	f.context = context
 	notify, err := fanotify.Initialize(
 		unix.FAN_CLOEXEC|
 			unix.FAN_CLASS_NOTIF,
@@ -63,7 +66,7 @@ func (f *fanotifyCache) Init(context pipeline.Context) {
 
 func (f *fanotifyCache) AddPath(path string) {
 	if f.maxFiles >= MAX_MARK {
-		logger.Warning(context.Background(), "add path err: maxfiles reached")
+		logger.Warning(f.context.GetRuntimeContext(), "add path err: maxfiles reached")
 		return
 	}
 	if err := f.notify.Mark(
@@ -73,7 +76,7 @@ func (f *fanotifyCache) AddPath(path string) {
 		unix.AT_FDCWD,
 		path,
 	); err != nil {
-		logger.Errorf(context.Background(), "add mark notify", "path: %v, err: %v", path, err)
+		logger.Errorf(f.context.GetRuntimeContext(), "add mark notify", "path: %v, err: %v", path, err)
 		return
 	}
 	f.maxFiles++
@@ -138,7 +141,7 @@ func (f *fanotifyCache) handleEvent(event *notifyEvent) {
 			_info.pid = event.pid
 			_info.init = true
 
-			logger.Infof(context.Background(), "update pid %d path %s", event.pid, event.path)
+			logger.Infof(f.context.GetRuntimeContext(), "update pid %d path %s", event.pid, event.path)
 		} else {
 			_info = &info{
 				timestamp: time.Now().UnixNano(),
@@ -146,7 +149,7 @@ func (f *fanotifyCache) handleEvent(event *notifyEvent) {
 				init:      true,
 			}
 
-			logger.Infof(context.Background(), "create pid %d path %s", event.pid, event.path)
+			logger.Infof(f.context.GetRuntimeContext(), "create pid %d path %s", event.pid, event.path)
 			f.path2pid[event.path] = _info
 		}
 	}
