@@ -137,12 +137,16 @@ func (f *fanotifyCache) handleEvent(event *notifyEvent) {
 			_info.timestamp = time.Now().UnixNano()
 			_info.pid = event.pid
 			_info.init = true
+
+			logger.Infof(context.Background(), "update pid %d path %s", event.pid, event.path)
 		} else {
 			_info = &info{
 				timestamp: time.Now().UnixNano(),
 				pid:       event.pid,
 				init:      true,
 			}
+
+			logger.Infof(context.Background(), "create pid %d path %s", event.pid, event.path)
 			f.path2pid[event.path] = _info
 		}
 	}
