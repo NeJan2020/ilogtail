@@ -63,9 +63,6 @@ func (p *ProcessorPathToPid) Init(context pipeline.Context) error {
 // Process... log only
 func (p *ProcessorPathToPid) Process(in *models.PipelineGroupEvents, context pipeline.PipelineContext) {
 	// DEBUG
-	for k, v := range in.Group.Metadata.Iterator() {
-		logger.Info(p.context.GetRuntimeContext(), "GROUP MD", "k", k, "v", v)
-	}
 	for k, v := range in.Group.Tags.Iterator() {
 		logger.Info(p.context.GetRuntimeContext(), "GROUP TAG", "k", k, "v", v)
 	}
