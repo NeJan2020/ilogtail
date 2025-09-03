@@ -80,6 +80,7 @@ func (p *ProcessorPathToPid) Process(in *models.PipelineGroupEvents, context pip
 				in.Group.Tags.Add("pid", strconv.Itoa(info.pid))
 			}
 		}
+		in.Group.Tags.Add("_source_", path)
 	}
 
 	context.Collector().Collect(in.Group, in.Events...)

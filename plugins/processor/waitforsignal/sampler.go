@@ -5,6 +5,7 @@ import (
 	"sync"
 
 	"github.com/alibaba/ilogtail/pkg/logger"
+	"github.com/alibaba/ilogtail/pkg/models"
 	"github.com/alibaba/ilogtail/pkg/pipeline"
 	"github.com/alibaba/ilogtail/pkg/protocol"
 )
@@ -28,7 +29,7 @@ type SignalSampler struct {
 	DisableSignalSampler bool
 	SamplerId            int
 	// 最大存储内存
-	MaxCacheByte int
+	MaxCacheByte uint64
 
 	// Move To tags
 	ContentsRename map[string]string
@@ -37,7 +38,9 @@ type SignalSampler struct {
 	logChan    chan<- *CacheLog
 
 	// 下次要导出的日志
-	logEventExposed []*protocol.Log
+	logEventExposed   []*protocol.Log
+	logEventExposedV2 []*models.PipelineGroupEvents
+
 	// 接收信号时要准备下次导出数据和每次处理输入后，带走导出数据冲突
 	exposedMutex sync.RWMutex
 	// 初始化失败的标记，如果初始化失败，不在做存储
@@ -58,89 +61,66 @@ func (*SignalSampler) Description() string {
 	return "cache and wait for signal"
 }
 
-func (s *SignalSampler) ProcessLogs(logArray []*protocol.Log) []*protocol.Log {
-	// 不进行缓存采样
+func (s *SignalSampler) Process(in *models.PipelineGroupEvents, context pipeline.PipelineContext) {
+
+	var containerID, pidStr string
+	if in != nil && in.Group != nil && in.Group.Tags != nil {
+		newTags := make(map[string]string)
+		for k, v := range in.Group.Tags.Iterator() {
+			if rename, find := s.ContentsRename[k]; find {
+				newTags[rename] = v
+			}
+
+			if k == "_container_id_" {
+				containerID = v
+			}
+			if k == "pid" {
+				pidStr = v
+			}
+		}
+		for k, v := range newTags {
+			in.Group.Tags.Add(k, v)
+		}
+	}
+
 	if s.initWithError || s.DisableSignalSampler {
-		// 仅根据配置重命名部分Tag
-		return s.renameLabelOnly(logArray)
+		context.Collector().Collect(in.Group, in.Events...)
+		return
 	}
 
-	for _, log := range logArray {
-		s.logCounter++
-
-		// 提取采样关键信息,跳过空值日志
-		containerId, pid, skip := s.formatLog(log)
-		if skip {
-			// 跳过空值日志
-			continue
-		}
-
-		if len(containerId) == 0 && pid == 0 {
-			logger.Infof(s.context.GetRuntimeContext(), "no container id or pid found in log")
-			continue
-		}
-
-		// 缓存数据
-		s.CacheLog(log, containerId, pid)
-	}
-
-	return s.GetExposedLog()
-}
-
-// formatLog,提取用于采样的关键信息
-// hasEmpty: grpc传输不允许传输空键值对, 一旦遇到空值,不再处理
-func (s *SignalSampler) formatLog(log *protocol.Log) (containerId string, pid int, skip bool) {
-	for i := 0; i < len(log.Contents); i++ {
-		cont := log.Contents[i]
-		if cont.Key == "content" && cont.Value == "" {
-			// 跳过空值日志
-			return "", 0, true
-		}
-
-		if rename, find := s.ContentsRename[cont.Key]; find {
-			cont.Key = rename
-		}
-
-		if cont.Key == "_container_id_" {
-			if len(cont.Value) > 12 {
-				cont.Value = cont.Value[0:12]
-			}
-			containerId = cont.Value
-		} else if cont.Key == "pid" {
-			pid, _ = strconv.Atoi(cont.Value)
-		}
-	}
-	return containerId, pid, false
-}
-
-func (s *SignalSampler) renameLabelOnly(logArray []*protocol.Log) []*protocol.Log {
-	for _, log := range logArray {
-		s.logCounter++
-		for _, cont := range log.Contents {
-			if rename, find := s.ContentsRename[cont.Key]; find {
-				cont.Key = rename
-			}
-			if cont.Key == "_container_id_" {
-				if len(cont.Value) > 12 {
-					cont.Value = cont.Value[0:12]
-				}
+	if len(containerID) > 0 || len(pidStr) > 0 {
+		var earliest uint64
+		for _, event := range in.Events {
+			eTS := event.GetTimestamp()
+			if eTS < earliest || earliest == 0 {
+				earliest = eTS
 			}
 		}
-		log.Contents = append(log.Contents, &protocol.Log_Content{Key: "_time_ns_", Value: strconv.FormatUint(uint64(log.GetTimeNs()), 10)})
-		log.Contents = append(log.Contents, &protocol.Log_Content{Key: "log_seq", Value: strconv.FormatUint(uint64(s.logCounter), 10)})
+
+		pid, err := strconv.Atoi(pidStr)
+		if err != nil {
+			pid = 0
+		}
+		s.cacheLogV2(in, containerID, pid, earliest)
 	}
-	return logArray
+
+	exposed := s.GetExposedLogV2()
+	for i := 0; i < len(exposed); i++ {
+		context.Collector().Collect(exposed[i].Group, exposed[i].Events...)
+	}
 }
 
-func (s *SignalSampler) CacheLog(log *protocol.Log, containerId string, pid int) {
+func (s *SignalSampler) cacheLogV2(in *models.PipelineGroupEvents, containerId string, pid int, logTime uint64) {
 	cachedLog := CacheLog{
-		Log: log,
+		LogRef: LogRef{
+			v2Log: in,
+		},
 		SourceKeyRef: SourceKey{
 			FromSampler: s.SamplerId,
 			ContainerId: containerId,
 			ProcessPid:  pid,
 		},
-		LogCapturedTime: log.GetTime(),
+		LogCapturedTime: logTime,
 		GlobalIndex: GlobalIndex{
 			// ProcessIndex: 0,
 			LogIndexInProcess: s.logCounter,
@@ -150,40 +130,49 @@ func (s *SignalSampler) CacheLog(log *protocol.Log, containerId string, pid int)
 	s.logChan <- &cachedLog
 }
 
+func (s *SignalSampler) addExposedV2Log(outLog *CacheLog) {
+	if outLog.v2Log == nil {
+		return
+	}
+
+	v2Log := outLog.GetV2Log()
+
+	// Hack: 用于后续的日志在系统中的准确排序
+	v2Log.Group.Tags.Add("_time_ns_", "0")
+	v2Log.Group.Tags.Add("log_seq", strconv.FormatUint(uint64(s.logCounter), 10))
+
+	s.logEventExposedV2 = append(s.logEventExposedV2, v2Log)
+}
+
 func (s *SignalSampler) AddExposedLog(outLog *CacheLog) {
 	s.exposedMutex.Lock()
 	defer s.exposedMutex.Unlock()
-	s.addIntoExposedAndRichLog(outLog)
+	if outLog.v1Log != nil {
+		s.addExposedV1Log(outLog)
+	}
+	s.addExposedV2Log(outLog)
 }
 
 func (s *SignalSampler) AddExposedLogs(outLogs []*CacheLog) {
 	s.exposedMutex.Lock()
 	defer s.exposedMutex.Unlock()
 	for _, outLog := range outLogs {
-		s.addIntoExposedAndRichLog(outLog)
+		if outLog.v1Log != nil {
+			s.addExposedV1Log(outLog)
+		} else {
+			s.addExposedV2Log(outLog)
+		}
 	}
 }
 
-func (s *SignalSampler) addIntoExposedAndRichLog(outLog *CacheLog) {
-	if s.logEventExposed == nil {
-		s.logEventExposed = make([]*protocol.Log, 0, 8)
-	}
-
-	// outLog.Log.Contents = append(outLog.Log.Contents, &protocol.Log_Content{Key: "span_id", Value: outLog.SpanId})
-	outLog.Log.Contents = append(outLog.Log.Contents, &protocol.Log_Content{Key: "_time_ns_", Value: strconv.FormatUint(uint64(outLog.GetTimeNs()), 10)})
-	outLog.Log.Contents = append(outLog.Log.Contents, &protocol.Log_Content{Key: "log_seq", Value: strconv.FormatUint(uint64(outLog.LogIndexInProcess), 10)})
-
-	s.logEventExposed = append(s.logEventExposed, outLog.Log)
-}
-
-func (s *SignalSampler) GetExposedLog() []*protocol.Log {
-	if len(s.logEventExposed) == 0 {
+func (s *SignalSampler) GetExposedLogV2() []*models.PipelineGroupEvents {
+	if len(s.logEventExposedV2) == 0 {
 		return nil
 	}
 
 	s.exposedMutex.Lock()
 	defer s.exposedMutex.Unlock()
-	out := s.logEventExposed
-	s.logEventExposed = nil
+	out := s.logEventExposedV2
+	s.logEventExposedV2 = nil
 	return out
 }

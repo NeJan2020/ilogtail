@@ -645,7 +645,12 @@ func (dc *ContainerCenter) CreateInfoDetail(info types.ContainerJSON, envConfigP
 	}
 	sortMounts(info.Mounts)
 
-	containerNameTag["_container_id_"] = info.ID
+	if len(info.ID) > 12 {
+		containerNameTag["_container_id_"] = info.ID[:12]
+	} else if len(info.ID) > 0 {
+		containerNameTag["_container_id_"] = info.ID
+	}
+
 	did := &DockerInfoDetail{
 		StdoutPath:       info.LogPath,
 		ContainerInfo:    info,

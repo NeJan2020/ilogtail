@@ -82,7 +82,7 @@ func (c *SignalList) RangeMatch(cachedLog *CacheLog) bool {
 
 func (c *SignalList) CleanExpiredSignals(isExpiredNeed bool) []*LogSignalStatus {
 	var expiredSignalList = make([]*LogSignalStatus, 0)
-	now := uint32(time.Now().Unix())
+	now := uint64(time.Now().Unix())
 
 	for i := 0; i < len(c.cachedSignalList); i++ {
 		signal := c.cachedSignalList[i]

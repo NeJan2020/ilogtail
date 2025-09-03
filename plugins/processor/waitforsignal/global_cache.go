@@ -29,7 +29,7 @@ var configNameIdMap map[string]int = map[string]int{}
 
 const sockAddr = "/opt/signal/logexpose.sock"
 
-func initGlobalCache(maxCacheMemByte int) *GlobalCache {
+func initGlobalCache(maxCacheMemByte uint64) *GlobalCache {
 	if maxCacheMemByte <= 0 || maxCacheMemByte > MAX_CACHE_MEM_BYTE {
 		maxCacheMemByte = MAX_CACHE_MEM_BYTE
 	}

@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/alibaba/ilogtail/pkg/logger"
+	"github.com/alibaba/ilogtail/pkg/models"
 	"github.com/alibaba/ilogtail/pkg/protocol"
 )
 
@@ -30,7 +31,7 @@ type RingCacheBuffer struct {
 	EndIndex int
 
 	// 总存储数据量大小,随数据插入或修改更新
-	GlobalDataSize int
+	GlobalDataSize uint64
 
 	// 超长Slice，用于环形缓存接收的日志数据
 	// 所有进入缓存的数据在有效数据区内按采样时间升序
@@ -39,12 +40,12 @@ type RingCacheBuffer struct {
 	// 最大缓存的日志条数
 	MaxSize int
 	// 最大缓存的日志体积
-	MaxCacheByte int
+	MaxCacheByte uint64
 	// 用于记录缓存数据过期的时间和未过期数据的开始Index
 	OutDateIndex *OutDateIndex
 }
 
-func NewRingCacheBuffer(maxSize int, maxCacheByte int) *RingCacheBuffer {
+func NewRingCacheBuffer(maxSize int, maxCacheByte uint64) *RingCacheBuffer {
 	return &RingCacheBuffer{
 		Cache:          make([]*CacheLog, maxSize),
 		MaxSize:        maxSize,
@@ -60,10 +61,10 @@ func NewRingCacheBuffer(maxSize int, maxCacheByte int) *RingCacheBuffer {
 }
 
 func (b *RingCacheBuffer) AddIntoBuffer(log *CacheLog) {
-	if (log.Size()+b.GlobalDataSize) > int(b.MaxCacheByte) &&
+	if (log.GetSize()+b.GlobalDataSize) > b.MaxCacheByte &&
 		b.Cache[b.StartIndex] != nil {
 		// 丢弃缓存最久的事件
-		b.GlobalDataSize -= b.Cache[b.StartIndex].Size()
+		b.GlobalDataSize -= b.Cache[b.StartIndex].GetSize()
 		logger.Info(context.Background(),
 			"cached too much data, drop the earliest log at timestamp", b.Cache[b.StartIndex].LogCapturedTime,
 			"container_id", b.Cache[b.StartIndex].SourceKeyRef.ContainerId,
@@ -75,10 +76,10 @@ func (b *RingCacheBuffer) AddIntoBuffer(log *CacheLog) {
 
 	// 如果缓存的日志数追上了开头, StartIndex 往前移动一位
 	if b.EndIndex == b.StartIndex && b.Cache[b.StartIndex] != nil {
-		b.GlobalDataSize -= b.Cache[b.StartIndex].Size()
+		b.GlobalDataSize -= b.Cache[b.StartIndex].GetSize()
 		b.StartIndex = (b.StartIndex + 1) % b.MaxSize
 	}
-	b.GlobalDataSize += log.Size()
+	b.GlobalDataSize += log.GetSize()
 	b.Cache[b.EndIndex] = log
 	b.EndIndex = (b.EndIndex + 1) % b.MaxSize
 }
@@ -96,7 +97,7 @@ func (b *RingCacheBuffer) searchRange(signal *LogSignalStatus, samplerIndex int,
 			continue
 		}
 		// 如果日志时间过早, 不再向前遍历
-		if logEntry.LogCapturedTime < uint32(signal.StartTS)-2 {
+		if logEntry.LogCapturedTime < signal.StartTS-2 {
 			break
 		}
 		// if logEntry.CacheTimestamp < uint32(signal.StartTS)-1 || logEntry.CacheTimestamp > uint32(signal.EndTS)+1 || logEntry.Exposed {
@@ -117,7 +118,7 @@ func (b *RingCacheBuffer) searchRange(signal *LogSignalStatus, samplerIndex int,
 	return res
 }
 
-func (b *RingCacheBuffer) GetStartTS() uint32 {
+func (b *RingCacheBuffer) GetStartTS() uint64 {
 	if b == nil || b.Cache == nil {
 		return 0
 	}
@@ -128,7 +129,7 @@ func (b *RingCacheBuffer) GetStartTS() uint32 {
 	return startItem.LogCapturedTime
 }
 
-func (b *RingCacheBuffer) GetEndTS() uint32 {
+func (b *RingCacheBuffer) GetEndTS() uint64 {
 	if b == nil || b.Cache == nil {
 		return 0
 	}
@@ -181,20 +182,20 @@ func (b *RingCacheBuffer) CheckAndUpdateOutDateIndex() (updated bool, err error)
 	if b.StartIndex < nextStartIndex {
 		for i := b.StartIndex; i < nextStartIndex; i++ {
 			if b.Cache[i] != nil {
-				b.GlobalDataSize -= b.Cache[i].Size()
+				b.GlobalDataSize -= b.Cache[i].GetSize()
 				b.Cache[i] = nil
 			}
 		}
 	} else if b.StartIndex > nextStartIndex {
 		for i := b.StartIndex; i < b.MaxSize; i++ {
 			if b.Cache[i] != nil {
-				b.GlobalDataSize -= b.Cache[i].Size()
+				b.GlobalDataSize -= b.Cache[i].GetSize()
 				b.Cache[i] = nil
 			}
 		}
 		for i := 0; i < nextStartIndex; i++ {
 			if b.Cache[i] != nil {
-				b.GlobalDataSize -= b.Cache[i].Size()
+				b.GlobalDataSize -= b.Cache[i].GetSize()
 				b.Cache[i] = nil
 			}
 		}
@@ -205,11 +206,11 @@ func (b *RingCacheBuffer) CheckAndUpdateOutDateIndex() (updated bool, err error)
 }
 
 type CacheLog struct {
-	*protocol.Log
+	LogRef
 
 	SourceKeyRef SourceKey
 	// LogCapturedTime 日志采集时间
-	LogCapturedTime uint32
+	LogCapturedTime uint64
 	// 日志导出时关联的信号的spanId
 	// 一个日志可能匹配多个信号, 只存储第一个匹配的信号
 	SpanId string
@@ -241,7 +242,7 @@ type SourceKey struct {
 // 每次检查时，将60s前的数据标记为过期
 type OutDateIndex struct {
 	StartIndexCache [6]int
-	EventTimestamp  [6]uint32
+	EventTimestamp  [6]uint64
 
 	// range from 0-5
 	NextStartIndexIdx int
@@ -250,7 +251,7 @@ type OutDateIndex struct {
 }
 
 // 提供未过期数据的开始Index
-func (oi *OutDateIndex) NextStartIndex() (index int, ts uint32) {
+func (oi *OutDateIndex) NextStartIndex() (index int, ts uint64) {
 	if !oi.start {
 		return 0, 0
 	}
@@ -258,7 +259,7 @@ func (oi *OutDateIndex) NextStartIndex() (index int, ts uint32) {
 }
 
 // 更新缓存的数据过期状态
-func (oi *OutDateIndex) UpdateDateCache(index int, ts uint32) {
+func (oi *OutDateIndex) UpdateDateCache(index int, ts uint64) {
 	// 首轮缓存结束后
 	if oi.NextStartIndexIdx >= 5 {
 		oi.start = true
@@ -268,4 +269,34 @@ func (oi *OutDateIndex) UpdateDateCache(index int, ts uint32) {
 	newCacheIdx := (oi.NextStartIndexIdx + 5) % 6
 	oi.StartIndexCache[newCacheIdx] = index
 	oi.EventTimestamp[newCacheIdx] = ts
+}
+
+type LogRef struct {
+	v1Log *protocol.Log
+	v2Log *models.PipelineGroupEvents
+}
+
+func (r *LogRef) GetSize() uint64 {
+	if r.v1Log != nil {
+		return uint64(r.v1Log.Size())
+	}
+	if r.v2Log != nil {
+		return uint64(r.v2Log.GetSize())
+	}
+	return 0
+}
+
+func (r *LogRef) GetV1Log() *protocol.Log {
+	return r.v1Log
+}
+
+func (r *LogRef) GetV2Log() *models.PipelineGroupEvents {
+	return r.v2Log
+}
+
+func (r *LogRef) GetTimeNs() uint64 {
+	if r.v1Log != nil {
+		return uint64(r.v1Log.GetTimeNs())
+	}
+	return 0
 }
