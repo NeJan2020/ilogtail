@@ -100,6 +100,7 @@ func (p *ProcessorPathToPid) processLog(log *protocol.Log) {
 			if info == nil {
 				f.addPathWatch(content.Value)
 			} else if info.init {
+				logger.Infof(p.context.GetRuntimeContext(), "get pid from path", "path: %s, pid: %d", content.Value, info.pid)
 				pid_kv := &protocol.Log_Content{Key: "pid", Value: strconv.Itoa(info.pid)}
 				log.Contents = append(log.Contents, pid_kv)
 			}
