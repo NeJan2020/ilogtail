@@ -95,6 +95,8 @@ func (p *ProcessorPathToPid) processLog(log *protocol.Log) {
 		return
 	}
 	for _, content := range log.Contents {
+		// DEBUG
+		logger.Info(p.context.GetRuntimeContext(), "process log", "key: %s, value: %s", content.Key, content.Value)
 		if content.Key == "__tag__:__path__" {
 			info := f.getPidFromPath(content.Value)
 			if info == nil {
