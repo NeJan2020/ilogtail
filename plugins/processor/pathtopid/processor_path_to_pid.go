@@ -50,6 +50,7 @@ func (p *ProcessorPathToPid) Init(context pipeline.Context) error {
 	})
 
 	if p.ParseMount {
+		f.rawPath2MountPath = make(map[string]string)
 		f.parseMount = true
 	}
 
