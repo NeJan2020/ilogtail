@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -36,15 +35,15 @@ func NewUnixSocketServer(sockAddr string) (*LogSignalServer, error) {
 		if !sock.IsDir() {
 			err := os.Remove(sockAddr)
 			if err != nil {
-				return nil, errors.New(fmt.Sprintf("file[%s] exist , remove failed, err: %v", sockAddr, err))
+				return nil, fmt.Errorf("file[%s] exist , remove failed, err: %v", sockAddr, err)
 			}
 		} else {
-			return nil, errors.New(fmt.Sprintf("filePath file[%s] cannot create, exist dir", sockAddr))
+			return nil, fmt.Errorf("filePath file[%s] cannot create, exist dir", sockAddr)
 		}
 	} else if _, err := os.Stat(dir); os.IsNotExist(err) {
 		err := os.MkdirAll(dir, os.ModePerm)
 		if err != nil {
-			return nil, errors.New(fmt.Sprintf("parentPath dir[%s] cannot create, err: %v", dir, err))
+			return nil, fmt.Errorf("parentPath dir[%s] cannot create, err: %v", dir, err)
 		}
 	}
 

@@ -210,7 +210,7 @@ type CacheLog struct {
 
 	SourceKeyRef SourceKey
 	// LogCapturedTime 日志采集时间
-	LogCapturedTime uint64
+	LogCapturedTime uint64 // unit: second
 	// 日志导出时关联的信号的spanId
 	// 一个日志可能匹配多个信号, 只存储第一个匹配的信号
 	SpanId string

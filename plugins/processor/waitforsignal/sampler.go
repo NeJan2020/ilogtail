@@ -62,7 +62,6 @@ func (*SignalSampler) Description() string {
 }
 
 func (s *SignalSampler) Process(in *models.PipelineGroupEvents, context pipeline.PipelineContext) {
-
 	var containerID, pidStr string
 	if in != nil && in.Group != nil && in.Group.Tags != nil {
 		newTags := make(map[string]string)
@@ -84,12 +83,20 @@ func (s *SignalSampler) Process(in *models.PipelineGroupEvents, context pipeline
 	}
 
 	if s.initWithError || s.DisableSignalSampler {
+		s.logCounter++
+		if in.Group != nil && in.Group.Tags != nil {
+			in.Group.Tags.Add("_time_ns_", "0")
+		}
+		for i := 0; i < len(in.Events); i++ {
+			in.Events[i].GetTags().Add("log_seq", strconv.FormatUint(uint64(s.logCounter)+uint64(i), 10))
+		}
+		s.logCounter += uint(len(in.Events) - 1)
 		context.Collector().Collect(in.Group, in.Events...)
 		return
 	}
 
 	if len(containerID) > 0 || len(pidStr) > 0 {
-		var earliest uint64
+		var earliest uint64 = 0
 		for _, event := range in.Events {
 			eTS := event.GetTimestamp()
 			if eTS < earliest || earliest == 0 {
@@ -101,7 +108,9 @@ func (s *SignalSampler) Process(in *models.PipelineGroupEvents, context pipeline
 		if err != nil {
 			pid = 0
 		}
+		s.logCounter++
 		s.cacheLogV2(in, containerID, pid, earliest)
+		s.logCounter += uint(len(in.Events) - 1) // skip log_seq for grouped event
 	}
 
 	exposed := s.GetExposedLogV2()
@@ -137,9 +146,10 @@ func (s *SignalSampler) addExposedV2Log(outLog *CacheLog) {
 
 	v2Log := outLog.GetV2Log()
 
-	// Hack: 用于后续的日志在系统中的准确排序
-	v2Log.Group.Tags.Add("_time_ns_", "0")
-	v2Log.Group.Tags.Add("log_seq", strconv.FormatUint(uint64(s.logCounter), 10))
+	v2Log.Group.Tags.Add("_time_ns_", "0") // can not sort v2Event by time_ns
+	for i := 0; i < len(v2Log.Events); i++ {
+		v2Log.Events[i].GetTags().Add("log_seq", strconv.FormatUint(uint64(s.logCounter)+uint64(i), 10))
+	}
 
 	s.logEventExposedV2 = append(s.logEventExposedV2, v2Log)
 }

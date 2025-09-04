@@ -7,8 +7,8 @@ import (
 
 // Signal 从主探针接收的采集信号
 type Signal struct {
-	StartTS uint64 `json:"start_ts"`
-	EndTS   uint64 `json:"end_ts"`
+	StartTS uint64 `json:"start_ts"` // unit: second
+	EndTS   uint64 `json:"end_ts"`   // unit: second
 
 	// 筛选条件
 	ContainerId string `json:"container_id"`

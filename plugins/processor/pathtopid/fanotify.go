@@ -106,7 +106,6 @@ func (f *fanotifyCache) continueGetEvent(eventCh chan<- *notifyEvent) {
 	for {
 		ev, err := f.getEvent()
 		if err == nil && ev != nil {
-			//logger.Infof(context.Background(), "get event", "event: %v", ev)
 			eventCh <- ev
 		}
 		if err != nil {
@@ -134,27 +133,25 @@ func (f *fanotifyCache) startWatchLifeCycle() {
 func (f *fanotifyCache) handleEvent(event *notifyEvent) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	// logger.Infof(context.Background(), "pid %d type %d path %s", event.pid, event.evType, event.path)
-	if event.evType != CLOSE {
-		_info, ok := f.path2pid[event.path]
-		if ok {
-			// 更新最近的使用时间
-			_info.timestamp = time.Now().UnixNano()
-			_info.pid = event.pid
-			_info.init = true
-
-			logger.Infof(f.context.GetRuntimeContext(), "update pid %d path %s", event.pid, event.path)
-		} else {
-			_info = &info{
-				timestamp: time.Now().UnixNano(),
-				pid:       event.pid,
-				init:      true,
-			}
-
-			logger.Infof(f.context.GetRuntimeContext(), "create pid %d path %s", event.pid, event.path)
-			f.path2pid[event.path] = _info
+	_info, ok := f.path2pid[event.path]
+	if !ok {
+		_info = &info{
+			timestamp: time.Now().UnixNano(),
+			pid:       event.pid,
+			init:      true,
 		}
+		f.path2pid[event.path] = _info
+		logger.Info(f.context.GetRuntimeContext(), "path2PID", "created", "path", event.path, "pid", event.pid)
 	}
+
+	if event.evType == CLOSE {
+		return
+	}
+
+	logger.Info(f.context.GetRuntimeContext(), "path2PID", "updated", "path", event.path, "pid", event.pid)
+	_info.timestamp = time.Now().UnixNano()
+	_info.pid = event.pid
+	_info.init = true
 }
 
 func (f *fanotifyCache) getEvent() (*notifyEvent, error) {
@@ -197,8 +194,6 @@ func (f *fanotifyCache) getEvent() (*notifyEvent, error) {
 	event.pid = data.GetPID()
 	event.evType = ev_type
 
-	//return fmt.Sprintf("%s,PID: %d: %s(fd: %d)", eventType, data.GetPID(), path, data.Fd), nil
-	logger.Infof(f.context.GetRuntimeContext(), "getEvent: %s,PID: %d: %s(fd: %d)", ev_type, data.GetPID(), path, data.Fd)
 	return &event, nil
 }
 

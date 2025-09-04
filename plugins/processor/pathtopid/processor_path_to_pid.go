@@ -13,6 +13,11 @@ import (
 
 const pluginName = "processor_path_to_pid"
 
+const v1_path_key = "__tag__:__path__"
+const v2_path_key = "__path__"
+const pid_key = "pid"
+const expected_path_key = "_source_"
+
 var f *fanotifyCache = &fanotifyCache{}
 var initFanotifyOnce sync.Once
 
@@ -67,17 +72,21 @@ func (p *ProcessorPathToPid) Process(in *models.PipelineGroupEvents, context pip
 		logger.Info(p.context.GetRuntimeContext(), "GROUP TAG", "k", k, "v", v)
 	}
 
+	for _, event := range in.Events {
+		logger.Info(p.context.GetRuntimeContext(), "TIMESTAMP", event.GetTimestamp())
+	}
+
 	if in.Group != nil && in.Group.Tags != nil {
-		path := in.Group.Tags.Get("__path__")
+		path := in.Group.Tags.Get(v2_path_key)
 		if len(path) >= 0 {
 			info := f.getPidFromPath(path)
 			if info == nil {
 				f.addPathWatch(path)
 			} else if info.init {
-				in.Group.Tags.Add("pid", strconv.Itoa(info.pid))
+				in.Group.Tags.Add(pid_key, strconv.Itoa(info.pid))
 			}
+			in.Group.Tags.Add(expected_path_key, path)
 		}
-		in.Group.Tags.Add("_source_", path)
 	}
 
 	context.Collector().Collect(in.Group, in.Events...)
@@ -95,17 +104,17 @@ func (p *ProcessorPathToPid) processLog(log *protocol.Log) {
 		return
 	}
 	for _, content := range log.Contents {
-		// DEBUG
-		logger.Info(p.context.GetRuntimeContext(), "message", "process log", "k", content.Key, "v", content.Value)
-		if content.Key == "__tag__:__path__" {
-			info := f.getPidFromPath(content.Value)
-			if info == nil {
-				f.addPathWatch(content.Value)
-			} else if info.init {
-				logger.Infof(p.context.GetRuntimeContext(), "message", "path", content.Value, "pid", info.pid)
-				pid_kv := &protocol.Log_Content{Key: "pid", Value: strconv.Itoa(info.pid)}
-				log.Contents = append(log.Contents, pid_kv)
-			}
+		if content.Key != v1_path_key {
+			continue
 		}
+
+		info := f.getPidFromPath(content.Value)
+		if info == nil {
+			f.addPathWatch(content.Value)
+		} else if info.init {
+			log.Contents = append(log.Contents, &protocol.Log_Content{Key: pid_key, Value: strconv.Itoa(info.pid)})
+			log.Contents = append(log.Contents, &protocol.Log_Content{Key: expected_path_key, Value: content.Value})
+		}
+		break
 	}
 }
