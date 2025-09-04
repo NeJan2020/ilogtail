@@ -1,9 +1,13 @@
 package pathtopid
 
 import (
+	"bufio"
+	"bytes"
 	"context"
 	"fmt"
 	"os"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -20,9 +24,13 @@ type fanotifyCache struct {
 	hostDir  string
 	maxFiles int
 
-	// path2pid -> host_dir + path
+	// path2pid -> host_dir + realPath -> info
 	path2pid map[string]*info
 	mu       sync.RWMutex
+
+	// parse Mount
+	rawPath2MountPath map[string]string
+	parseMount        bool
 
 	context pipeline.Context
 }
@@ -142,6 +150,7 @@ func (f *fanotifyCache) handleEvent(event *notifyEvent) {
 		}
 		f.path2pid[event.path] = _info
 		logger.Info(f.context.GetRuntimeContext(), "path2PID", "created", "path", event.path, "pid", event.pid)
+		return
 	}
 
 	if event.evType == CLOSE {
@@ -180,7 +189,24 @@ func (f *fanotifyCache) getEvent() (*notifyEvent, error) {
 
 	path, err := data.GetPath()
 	// 从事件中取出的事件的path不包含hostDir
+	// 可能是容器内路径
+
+	if f.parseMount {
+		if len(f.rawPath2MountPath) > 1e3 {
+			f.rawPath2MountPath = make(map[string]string)
+		}
+
+		key := fmt.Sprintf("%d@@%s", data.Pid, path)
+		if mountPath, ok := f.rawPath2MountPath[key]; ok {
+			path = mountPath
+		} else {
+			path = f.parseMountInfo(data, path)
+			f.rawPath2MountPath[key] = path
+		}
+	}
+
 	path = f.hostDir + path
+
 	if ev_type == MODIFY {
 		f.notify.Mark(unix.FAN_MARK_ADD|unix.FAN_MARK_IGNORED_MASK|unix.FAN_MARK_IGNORED_SURV_MODIFY, unix.FAN_MODIFY, unix.AT_FDCWD, path)
 	} else if ev_type == CLOSE {
@@ -195,6 +221,48 @@ func (f *fanotifyCache) getEvent() (*notifyEvent, error) {
 	event.evType = ev_type
 
 	return &event, nil
+}
+
+func (f *fanotifyCache) parseMountInfo(data *fanotify.EventMetadata, rawPath string) string {
+	fd, err := data.GetFdInfo()
+	if err != nil {
+		return rawPath
+	}
+
+	mountID := []byte(strconv.Itoa(fd.MountID))
+	pid := data.GetPID()
+
+	content, err := os.ReadFile(fmt.Sprintf("/proc/%d/mountinfo", pid))
+	if err != nil {
+		return rawPath
+	}
+
+	scanner := bufio.NewScanner(bytes.NewReader(content))
+	for scanner.Scan() {
+		line := scanner.Bytes()
+		if len(line) == 0 {
+			continue
+		}
+
+		i := bytes.IndexByte(line, ' ')
+		if i == -1 {
+			continue
+		}
+
+		if !bytes.Equal(line[:i], mountID) {
+			continue
+		}
+
+		fields := bytes.Fields(line)
+		target := string(fields[4])
+		source := string(fields[3])
+
+		if strings.HasPrefix(rawPath, target) {
+			return strings.Replace(rawPath, target, source, 1)
+		}
+	}
+
+	return rawPath
 }
 
 func (f *fanotifyCache) cleanExpired() {

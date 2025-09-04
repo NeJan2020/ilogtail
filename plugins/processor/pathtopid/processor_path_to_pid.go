@@ -36,7 +36,8 @@ type info struct {
 type ProcessorPathToPid struct {
 	context pipeline.Context
 
-	host_dir string
+	ParseMount bool
+	host_dir   string
 }
 
 func (p *ProcessorPathToPid) Description() string {
@@ -47,6 +48,10 @@ func (p *ProcessorPathToPid) Init(context pipeline.Context) error {
 	initFanotifyOnce.Do(func() {
 		f.Init(context)
 	})
+
+	if p.ParseMount {
+		f.parseMount = true
+	}
 
 	p.context = context
 	if val, ok := os.LookupEnv("HOST_DIR"); ok {

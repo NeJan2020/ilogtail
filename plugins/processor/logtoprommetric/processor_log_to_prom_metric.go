@@ -219,6 +219,7 @@ type ServiceTag struct {
 }
 
 func (s *ServiceTag) FillTag(key string, value string) {
+	key = strings.TrimPrefix(key, "__tag__:")
 	switch key {
 	case "_pod_name_":
 		s.PodName = value
@@ -226,7 +227,7 @@ func (s *ServiceTag) FillTag(key string, value string) {
 		s.Namespace = value
 	case "_container_name_":
 		s.ContainerName = value
-	case "_source_", "__tag__:__path__", "__path__":
+	case "_source_", "__path__":
 		s.SourceFrom = value
 	case "_container_id_":
 		if len(value) > 12 {
