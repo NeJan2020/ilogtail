@@ -39,7 +39,7 @@ type SignalSampler struct {
 
 	// 下次要导出的日志
 	logEventExposed   []*protocol.Log
-	logEventExposedV2 []*models.PipelineGroupEvents
+	logEventExposedV2 map[*models.GroupInfo]*models.PipelineGroupEvents
 
 	// 接收信号时要准备下次导出数据和每次处理输入后，带走导出数据冲突
 	exposedMutex sync.RWMutex
@@ -84,10 +84,8 @@ func (s *SignalSampler) Process(in *models.PipelineGroupEvents, context pipeline
 
 	if s.initWithError || s.DisableSignalSampler {
 		s.logCounter++
-		if in.Group != nil && in.Group.Tags != nil {
-			in.Group.Tags.Add("_time_ns_", "0")
-		}
 		for i := 0; i < len(in.Events); i++ {
+			in.Events[i].GetTags().Add("_time_ns_", strconv.FormatUint(in.Events[i].GetTimestamp()%1e9, 10))
 			in.Events[i].GetTags().Add("log_seq", strconv.FormatUint(uint64(s.logCounter)+uint64(i), 10))
 		}
 		s.logCounter += uint(len(in.Events) - 1)
@@ -96,21 +94,12 @@ func (s *SignalSampler) Process(in *models.PipelineGroupEvents, context pipeline
 	}
 
 	if len(containerID) > 0 || len(pidStr) > 0 {
-		var earliest uint64 = 0
-		for _, event := range in.Events {
-			eTS := event.GetTimestamp()
-			if eTS < earliest || earliest == 0 {
-				earliest = eTS
-			}
-		}
-
 		pid, err := strconv.Atoi(pidStr)
 		if err != nil {
 			pid = 0
 		}
 		s.logCounter++
-		s.cacheLogV2(in, containerID, pid, earliest)
-		s.logCounter += uint(len(in.Events) - 1) // skip log_seq for grouped event
+		s.cacheLogV2(in, containerID, pid)
 	}
 
 	exposed := s.GetExposedLogV2()
@@ -119,24 +108,27 @@ func (s *SignalSampler) Process(in *models.PipelineGroupEvents, context pipeline
 	}
 }
 
-func (s *SignalSampler) cacheLogV2(in *models.PipelineGroupEvents, containerId string, pid int, logTime uint64) {
-	cachedLog := CacheLog{
-		LogRef: LogRef{
-			v2Log: in,
-		},
-		SourceKeyRef: SourceKey{
-			FromSampler: s.SamplerId,
-			ContainerId: containerId,
-			ProcessPid:  pid,
-		},
-		LogCapturedTime: logTime,
-		GlobalIndex: GlobalIndex{
-			// ProcessIndex: 0,
-			LogIndexInProcess: s.logCounter,
-		},
-	}
+func (s *SignalSampler) cacheLogV2(in *models.PipelineGroupEvents, containerId string, pid int) {
+	for i := 0; i < len(in.Events); i++ {
+		if in.Events[i].GetType() != models.EventTypeLogging {
+			continue
+		}
 
-	s.logChan <- &cachedLog
+		cachedLog := CacheLog{
+			LogRef: LogRef{
+				v2Log:   in.Events[i],
+				v2Group: in.Group,
+			},
+			SourceKeyRef: SourceKey{
+				FromSampler: s.SamplerId,
+				ContainerId: containerId,
+				ProcessPid:  pid,
+			},
+			LogCapturedTime: in.Events[i].GetTimestamp() / 1e9,
+			GlobalIndex:     GlobalIndex{LogIndexInProcess: s.logCounter},
+		}
+		s.logChan <- &cachedLog
+	}
 }
 
 func (s *SignalSampler) addExposedV2Log(outLog *CacheLog) {
@@ -145,13 +137,16 @@ func (s *SignalSampler) addExposedV2Log(outLog *CacheLog) {
 	}
 
 	v2Log := outLog.GetV2Log()
-
-	v2Log.Group.Tags.Add("_time_ns_", "0") // can not sort v2Event by time_ns
-	for i := 0; i < len(v2Log.Events); i++ {
-		v2Log.Events[i].GetTags().Add("log_seq", strconv.FormatUint(uint64(s.logCounter)+uint64(i), 10))
+	v2Log.GetTags().Add("_time_ns_", strconv.FormatUint(v2Log.GetTimestamp()%1e9, 10))
+	v2Log.GetTags().Add("log_seq", strconv.FormatUint(uint64(outLog.LogIndexInProcess), 10))
+	if groups, ok := s.logEventExposedV2[outLog.v2Group]; ok {
+		groups.Events = append(groups.Events, v2Log)
+	} else {
+		s.logEventExposedV2[outLog.v2Group] = &models.PipelineGroupEvents{
+			Group:  outLog.v2Group,
+			Events: []models.PipelineEvent{v2Log},
+		}
 	}
-
-	s.logEventExposedV2 = append(s.logEventExposedV2, v2Log)
 }
 
 func (s *SignalSampler) AddExposedLog(outLog *CacheLog) {
@@ -176,13 +171,12 @@ func (s *SignalSampler) AddExposedLogs(outLogs []*CacheLog) {
 }
 
 func (s *SignalSampler) GetExposedLogV2() []*models.PipelineGroupEvents {
-	if len(s.logEventExposedV2) == 0 {
-		return nil
-	}
-
 	s.exposedMutex.Lock()
 	defer s.exposedMutex.Unlock()
-	out := s.logEventExposedV2
-	s.logEventExposedV2 = nil
+
+	var out []*models.PipelineGroupEvents
+	for _, v := range s.logEventExposedV2 {
+		out = append(out, v)
+	}
 	return out
 }

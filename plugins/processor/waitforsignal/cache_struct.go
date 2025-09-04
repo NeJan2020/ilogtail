@@ -272,8 +272,9 @@ func (oi *OutDateIndex) UpdateDateCache(index int, ts uint64) {
 }
 
 type LogRef struct {
-	v1Log *protocol.Log
-	v2Log *models.PipelineGroupEvents
+	v1Log   *protocol.Log
+	v2Log   models.PipelineEvent
+	v2Group *models.GroupInfo
 }
 
 func (r *LogRef) GetSize() uint64 {
@@ -290,7 +291,7 @@ func (r *LogRef) GetV1Log() *protocol.Log {
 	return r.v1Log
 }
 
-func (r *LogRef) GetV2Log() *models.PipelineGroupEvents {
+func (r *LogRef) GetV2Log() models.PipelineEvent {
 	return r.v2Log
 }
 
