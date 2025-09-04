@@ -96,13 +96,13 @@ func (p *ProcessorPathToPid) processLog(log *protocol.Log) {
 	}
 	for _, content := range log.Contents {
 		// DEBUG
-		logger.Info(p.context.GetRuntimeContext(), "process log", "key: %s, value: %s", content.Key, content.Value)
+		logger.Info(p.context.GetRuntimeContext(), "message", "process log", "k", content.Key, "v", content.Value)
 		if content.Key == "__tag__:__path__" {
 			info := f.getPidFromPath(content.Value)
 			if info == nil {
 				f.addPathWatch(content.Value)
 			} else if info.init {
-				logger.Infof(p.context.GetRuntimeContext(), "get pid from path", "path: %s, pid: %d", content.Value, info.pid)
+				logger.Infof(p.context.GetRuntimeContext(), "message", "path", content.Value, "pid", info.pid)
 				pid_kv := &protocol.Log_Content{Key: "pid", Value: strconv.Itoa(info.pid)}
 				log.Contents = append(log.Contents, pid_kv)
 			}

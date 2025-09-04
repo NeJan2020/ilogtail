@@ -69,6 +69,8 @@ func (f *fanotifyCache) AddPath(path string) {
 		logger.Warning(f.context.GetRuntimeContext(), "add path err: maxfiles reached")
 		return
 	}
+
+	logger.Info(f.context.GetRuntimeContext(), "message", "AddPath", "path", path)
 	if err := f.notify.Mark(
 		unix.FAN_MARK_ADD,
 		unix.FAN_MODIFY|
@@ -196,7 +198,7 @@ func (f *fanotifyCache) getEvent() (*notifyEvent, error) {
 	event.evType = ev_type
 
 	//return fmt.Sprintf("%s,PID: %d: %s(fd: %d)", eventType, data.GetPID(), path, data.Fd), nil
-	//logger.Infof(context.Background(), "getEvent: %s,PID: %d: %s(fd: %d)", ev_type, data.GetPID(), path, data.Fd)
+	logger.Infof(f.context.GetRuntimeContext(), "getEvent: %s,PID: %d: %s(fd: %d)", ev_type, data.GetPID(), path, data.Fd)
 	return &event, nil
 }
 
