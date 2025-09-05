@@ -232,37 +232,92 @@ func (f *fanotifyCache) parseMountInfo(data *fanotify.EventMetadata, rawPath str
 	mountID := []byte(strconv.Itoa(fd.MountID))
 	pid := data.GetPID()
 
-	content, err := os.ReadFile(fmt.Sprintf("/proc/%d/mountinfo", pid))
+	file, err := os.Open(fmt.Sprintf("/proc/%d/mountinfo", pid))
 	if err != nil {
 		return rawPath
 	}
+	defer file.Close()
 
-	scanner := bufio.NewScanner(bytes.NewReader(content))
+	scanner := bufio.NewScanner(file)
 	for scanner.Scan() {
 		line := scanner.Bytes()
 		if len(line) == 0 {
 			continue
 		}
 
-		i := bytes.IndexByte(line, ' ')
-		if i == -1 {
+		mountPoint, source, ok := parseMountInfoLine(line, mountID)
+		if !ok {
 			continue
 		}
 
-		if !bytes.Equal(line[:i], mountID) {
-			continue
+		if strings.HasPrefix(rawPath, string(mountPoint)) {
+			// 只替换一次，避免 mountPoint 在路径中间出现时误替换
+			return string(source) + rawPath[len(mountPoint):]
 		}
+		break
+	}
 
-		fields := bytes.Fields(line)
-		target := string(fields[4])
-		source := string(fields[3])
+	if err := scanner.Err(); err != nil {
+		logger.Error(f.context.GetRuntimeContext(), "PATH2PID read mountinfo failed", "err", err)
+	}
+	
+	return rawPath
+}
 
-		if strings.HasPrefix(rawPath, target) {
-			return strings.Replace(rawPath, target, source, 1)
+// parseMountInfoLine 解析 mountinfo 的一行，快速匹配 mountID。
+// 返回 mountPoint, source, 是否匹配。
+func parseMountInfoLine(line, targetID []byte) (mountPoint, source []byte, ok bool) {
+	// 1. 找第一个空格，拿到 mountID
+	i := bytes.IndexByte(line, ' ')
+	if i == -1 || !bytes.Equal(line[:i], targetID) {
+		return nil, nil, false
+	}
+
+	// 2. 跳过 parentID, major:minor, root，取到 mountPoint
+	fieldStart := i + 1
+	fieldCount := 0
+	var mountIdxStart, mountIdxEnd int
+	for j := fieldStart; j < len(line); j++ {
+		if line[j] == ' ' {
+			fieldCount++
+			if fieldCount == 3 {
+				mountIdxStart = j + 1
+			} else if fieldCount == 4 {
+				mountIdxEnd = j
+				break
+			}
+		}
+	}
+	if mountIdxStart == 0 || mountIdxEnd == 0 {
+		return nil, nil, false
+	}
+	mountPoint = line[mountIdxStart:mountIdxEnd]
+
+	// 3. 找 "-"，后面第一个字段是 fstype，第二个字段是 source
+	if dash := bytes.IndexByte(line, '-'); dash != -1 {
+		srcStart := dash + 1
+		// 跳过空格
+		for srcStart < len(line) && line[srcStart] == ' ' {
+			srcStart++
+		}
+		// 跳过 fstype
+		for srcStart < len(line) && line[srcStart] != ' ' {
+			srcStart++
+		}
+		for srcStart < len(line) && line[srcStart] == ' ' {
+			srcStart++
+		}
+		// source
+		srcEnd := srcStart
+		for srcEnd < len(line) && line[srcEnd] != ' ' {
+			srcEnd++
+		}
+		if srcStart < srcEnd {
+			source = line[srcStart:srcEnd]
 		}
 	}
 
-	return rawPath
+	return mountPoint, source, true
 }
 
 func (f *fanotifyCache) cleanExpired() {
